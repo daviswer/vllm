@@ -652,8 +652,8 @@ class MambaMixer2(MambaBase, CustomOp):
             # UPI
             scalefactor = 8
             dt_p = nn.functional.softplus(dt_p + self.dt_bias.to(dtype=dt_p.dtype))  # b l h
-            forget = dt_p.mul(self.A).float().exp()
-            xfactor = scalefactor * (1-forget.pow(1/scalefactor).clamp(min=1e-6, max=1-1e-6)) / (1-forget).clamp(min=1e-6, max=1-1e-6)
+            forget = dt_p.mul(self.A).float()
+            xfactor = scalefactor * (1-forget.div(scalefactor).exp()) / (1+1e-6-forget.exp())
             dt_p = dt_p / scalefactor
             hidden_states_p = hidden_states_p.view(1, num_prefill_tokens,
                                      self.num_heads // self.tp_size,
@@ -718,8 +718,8 @@ class MambaMixer2(MambaBase, CustomOp):
             # UPI
             scalefactor = 8
             dt_d = nn.functional.softplus(dt_d + self.dt_bias.to(dtype=dt_p.dtype))  # b h d
-            forget = dt_d.mul(A_d[:,:,0]).float().exp()
-            xfactor = scalefactor * (1-forget.pow(1/scalefactor).clamp(min=1e-6, max=1-1e-6)) / (1-forget).clamp(min=1e-6, max=1-1e-6)
+            forget = dt_d.mul(A_d[:,:,0]).float()
+            xfactor = scalefactor * (1-forget.div(scalefactor).exp()) / (1+1e-6-forget.exp())
             dt_d = dt_d / scalefactor
             hidden_states_d = hidden_states_d * xfactor.to(dtype=hidden_states_d.dtype)
 
