@@ -649,11 +649,19 @@ class MambaMixer2(MambaBase, CustomOp):
                         has_initial_states_p[:num_prefills, None, None, None],
                         ssm_state[state_indices_tensor_p], 0)
 
+            # UPI
+            scalefactor = 8
+            dt_p = nn.functional.softplus(dt_p + self.dt_bias.to(dtype=dt_p.dtype))  # b l h
+            forget = dt_p.mul(self.A).float().exp()
+            xfactor = scalefactor * (1-forget.pow(1/scalefactor).clamp(min=1e-6, max=1-1e-6)) / (1-forget).clamp(min=1e-6, max=1-1e-6)
+            dt_p = dt_p / scalefactor
+            hidden_states_p = hidden_states_p.view(1, num_prefill_tokens,
+                                     self.num_heads // self.tp_size,
+                                     self.head_dim) * xfactor.to(dtype=hidden_states_p.dtype).unsqueeze(-1)
+
             # NOTE: final output is an in-place update of out tensor
             varlen_state = mamba_chunk_scan_combined(
-                hidden_states_p.view(1, num_prefill_tokens,
-                                     self.num_heads // self.tp_size,
-                                     self.head_dim),
+                hidden_states_p,
                 dt_p.unsqueeze(0),
                 self.A,
                 B_p.view(1, num_prefill_tokens, self.n_groups // self.tp_size,
@@ -663,7 +671,7 @@ class MambaMixer2(MambaBase, CustomOp):
                 chunk_size=chunk_size,
                 D=self.D,
                 z=None,
-                dt_bias=self.dt_bias,
+                dt_bias=None,
                 seq_idx=seq_idx_p,
                 chunk_indices=chunk_indices_p,
                 chunk_offsets=chunk_offsets_p,
@@ -671,7 +679,7 @@ class MambaMixer2(MambaBase, CustomOp):
                 initial_states=initial_states,
                 return_varlen_states=True,
                 return_final_states=False,
-                dt_softplus=True,
+                dt_softplus=False,
                 dt_limit=(0.0, float("inf")),
                 out=preallocated_ssm_out_p.view(1, num_prefill_tokens, -1,
                                                 self.head_dim),
@@ -707,6 +715,14 @@ class MambaMixer2(MambaBase, CustomOp):
             hidden_states_d = hidden_states_d.view(
                 -1, self.num_heads // self.tp_size, self.head_dim)
 
+            # UPI
+            scalefactor = 8
+            dt_d = nn.functional.softplus(dt_d + self.dt_bias.to(dtype=dt_p.dtype))  # b h d
+            forget = dt_d.mul(A_d[:,:,0]).float().exp()
+            xfactor = scalefactor * (1-forget.pow(1/scalefactor).clamp(min=1e-6, max=1-1e-6)) / (1-forget).clamp(min=1e-6, max=1-1e-6)
+            dt_d = dt_d / scalefactor
+            hidden_states_d = hidden_states_d * xfactor.to(dtype=hidden_states_d.dtype)
+
             # - the hidden is reshaped into (bs, num_heads, head_dim)
             # - mamba_cache_params.ssm_state's slots will be selected
             #   using state_indices_tensor_d
@@ -720,8 +736,8 @@ class MambaMixer2(MambaBase, CustomOp):
                 C_d,
                 D_d,
                 z=None,
-                dt_bias=dt_bias,
-                dt_softplus=True,
+                dt_bias=None,
+                dt_softplus=False,
                 state_batch_indices=state_indices_tensor_d,
                 out=preallocated_ssm_out_d.view(num_decodes, -1,
                                                 self.head_dim),
